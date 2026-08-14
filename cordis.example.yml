@@ -8,7 +8,6 @@
       config:
         appId: '你的机器人 AppID'
         clientSecret: '你的机器人 AppSecret'
-        sessionId: 'qq-bridge'
         sandbox: false
         # allowGroups: ['GROUP_OPENID_1']
         # allowUsers: ['USER_OPENID_1']
