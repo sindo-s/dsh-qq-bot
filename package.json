@@ -1,0 +1,33 @@
+{
+  "name": "dsh-qq-bot",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin bridging QQ official Bot API (QQ 开放平台) to dsh agents. No third-party bot framework required.",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "qq-bot",
+    "qq-open-platform"
+  ],
+  "license": "MIT"
+}
