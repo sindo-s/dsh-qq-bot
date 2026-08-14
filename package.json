@@ -1,6 +1,6 @@
 {
   "name": "dsh-qq-bot",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "DeepSeek Harness plugin bridging QQ official Bot API (QQ 开放平台) to dsh agents. No third-party bot framework required.",
   "type": "module",
   "main": "src/index.ts",

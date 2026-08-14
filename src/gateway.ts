@@ -9,6 +9,9 @@ import type { QQApi } from './api.ts'
 /** 群聊 @ 机器人 + 单聊消息事件 intent。 */
 const INTENTS_GROUP_AND_C2C = 1 << 25
 
+/** 重连间隔（毫秒）。 */
+const RECONNECT_DELAY = 5000
+
 export interface QQMessageEvent {
   /** 事件类型：GROUP_AT_MESSAGE_CREATE / C2C_MESSAGE_CREATE */
   type: string
@@ -39,9 +42,12 @@ export class QQGateway {
   private options: QQGatewayOptions
   private ws: WebSocket | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private lastSeq: number | null = null
   private sessionId = ''
   private stopped = false
+  /** 上次心跳后是否收到过 ACK（op 11），用于心跳丢失告警 */
+  private heartbeatAcked = true
 
   constructor(api: QQApi, options: QQGatewayOptions) {
     this.api = api
@@ -59,11 +65,26 @@ export class QQGateway {
 
   stop() {
     this.stopped = true
-    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    this.clearTimers()
     this.ws?.close()
   }
 
+  private clearTimers() {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.heartbeatTimer = null
+    this.reconnectTimer = null
+  }
+
   private async connect() {
+    // 建立新连接前，确保旧连接已关闭，避免同一 token 双连接互踢
+    const old = this.ws
+    this.ws = null
+    if (old && old.readyState !== WebSocket.CLOSED && old.readyState !== WebSocket.CLOSING) {
+      old.onclose = null
+      old.close()
+    }
+
     const url = await this.api.getGatewayUrl()
     const token = await this.api.getAccessToken()
     const authToken = `QQBot ${token}`
@@ -73,44 +94,69 @@ export class QQGateway {
     this.ws = ws
 
     ws.onmessage = (ev) => {
-      const payload = JSON.parse(String(ev.data)) as GatewayPayload
+      let payload: GatewayPayload
+      try {
+        payload = JSON.parse(String(ev.data)) as GatewayPayload
+      } catch {
+        this.log('[dsh-qq-bot] ignoring unparseable gateway frame')
+        return
+      }
       if (payload.s !== undefined && payload.s !== null) this.lastSeq = payload.s
 
-      switch (payload.op) {
-        case 10: {
-          // Hello：启动心跳并鉴权/恢复
-          const interval = payload.d.heartbeat_interval as number
-          this.startHeartbeat(ws, interval)
-          if (this.sessionId) {
-            this.send(ws, { op: 6, d: { token: authToken, session_id: this.sessionId, seq: this.lastSeq } })
-          } else {
-            this.send(ws, {
-              op: 2,
-              d: {
-                token: authToken,
-                intents: INTENTS_GROUP_AND_C2C,
-                shard: [0, 1],
-                properties: {},
-              },
-            })
+      try {
+        switch (payload.op) {
+          case 10: {
+            // Hello：启动心跳并鉴权/恢复
+            const interval = payload.d.heartbeat_interval as number
+            this.startHeartbeat(ws, interval)
+            if (this.sessionId) {
+              this.send(ws, { op: 6, d: { token: authToken, session_id: this.sessionId, seq: this.lastSeq } })
+            } else {
+              this.send(ws, {
+                op: 2,
+                d: {
+                  token: authToken,
+                  intents: INTENTS_GROUP_AND_C2C,
+                  shard: [0, 1],
+                  properties: {},
+                },
+              })
+            }
+            break
           }
-          break
+          case 0:
+            this.handleDispatch(payload)
+            break
+          case 1:
+            // 服务端主动请求心跳，立即回应
+            this.send(ws, { op: 1, d: this.lastSeq })
+            break
+          case 11:
+            this.heartbeatAcked = true
+            break
+          case 7:
+            // 服务端要求重连（可恢复会话）
+            this.log('[dsh-qq-bot] server requested reconnect')
+            this.scheduleReconnect(ws)
+            break
+          case 9:
+            // 会话失效；d=false 表示不可恢复，需重新 Identify
+            if (payload.d === false) this.sessionId = ''
+            this.log(`[dsh-qq-bot] invalid session (resumable=${payload.d !== false})`)
+            this.scheduleReconnect(ws)
+            break
         }
-        case 0:
-          this.handleDispatch(payload)
-          break
-        case 7:
-        case 9:
-          // 服务端要求重连 / 会话失效
-          if (payload.op === 9) this.sessionId = ''
-          this.reconnect()
-          break
+      } catch (err) {
+        this.log(`[dsh-qq-bot] frame handling error: ${err}`)
       }
     }
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
-      if (!this.stopped) this.reconnect()
+      this.heartbeatTimer = null
+      // 关闭码是掉线原因的关键线索（4009 会话超时 / 4014 intents 未开通 等）
+      this.log(`[dsh-qq-bot] gateway closed: code=${ev.code} reason=${ev.reason || '(none)'}`)
+      if (!this.stopped) this.scheduleReconnect(ws)
     }
 
     ws.onerror = () => {
@@ -118,20 +164,32 @@ export class QQGateway {
     }
   }
 
-  private reconnect() {
-    if (this.stopped) return
-    this.log('[dsh-qq-bot] reconnecting in 5s...')
-    setTimeout(() => {
-      if (!this.stopped) void this.connect().catch((err) => {
+  /** 单flight 重连：同一时间只允许一个重连定时器。 */
+  private scheduleReconnect(fromWs?: WebSocket) {
+    if (this.stopped || this.reconnectTimer) return
+    if (fromWs && fromWs.readyState !== WebSocket.CLOSED && fromWs.readyState !== WebSocket.CLOSING) {
+      fromWs.onclose = null
+      fromWs.close()
+    }
+    this.log(`[dsh-qq-bot] reconnecting in ${RECONNECT_DELAY / 1000}s...`)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      if (this.stopped) return
+      void this.connect().catch((err) => {
         this.log(`[dsh-qq-bot] reconnect failed: ${err}`)
-        this.reconnect()
+        this.scheduleReconnect()
       })
-    }, 5000)
+    }, RECONNECT_DELAY)
   }
 
   private startHeartbeat(ws: WebSocket, interval: number) {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    this.heartbeatAcked = true
     this.heartbeatTimer = setInterval(() => {
+      if (!this.heartbeatAcked) {
+        this.log('[dsh-qq-bot] heartbeat ack missed, connection may be dead')
+      }
+      this.heartbeatAcked = false
       this.send(ws, { op: 1, d: this.lastSeq })
     }, interval)
   }
