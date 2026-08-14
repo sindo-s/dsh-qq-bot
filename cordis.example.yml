@@ -12,6 +12,7 @@
         publicMode: false
         allowGroups: ['GROUP_OPENID_1']
         allowUsers: ['USER_OPENID_1']
+        enableWhoami: true
         allowedTools: []
         maxSessions: 100
         sessionIdleMinutes: 60

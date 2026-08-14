@@ -14,6 +14,7 @@ import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { QQApi } from './api.ts'
 import { QQGateway, type QQMessageEvent } from './gateway.ts'
+import { formatIdentityReply, isIdentityCommand } from './identity.ts'
 import {
   KeyedSerialTaskQueue,
   MessageDeduplicator,
@@ -38,6 +39,8 @@ export interface Config {
   allowGroups?: string[]
   /** 允许响应的 user_openid；publicMode=false 时生效。 */
   allowUsers?: string[]
+  /** 允许白名单外用户通过 /whoami 或 /id 查询自己的 OpenID。 */
+  enableWhoami?: boolean
   /** QQ Agent 可以继承使用的宿主全局工具名；默认不继承任何工具。 */
   allowedTools?: string[]
   /** 同时保留的最大 QQ 会话数。 */
@@ -55,18 +58,22 @@ export const Config: Schema<Config> = Schema.object({
   publicMode: Schema.boolean().default(false).description('允许所有 QQ 用户访问；公开部署前请确认 Agent 工具权限'),
   allowGroups: Schema.array(String).default([]).description('允许访问的群聊 group_openid'),
   allowUsers: Schema.array(String).default([]).description('允许访问的单聊 user_openid'),
+  enableWhoami: Schema.boolean().default(true).description('允许白名单外用户使用 /whoami 或 /id 查询 OpenID'),
   allowedTools: Schema.array(String).default([]).description('QQ Agent 可继承的宿主全局工具名'),
   maxSessions: Schema.number().min(1).default(100).description('同时保留的最大 QQ 会话数'),
   sessionIdleMinutes: Schema.number().min(1).default(60).description('空闲会话自动销毁时间（分钟）'),
   requestTimeoutMs: Schema.number().min(1000).default(10_000).description('QQ REST API 请求超时（毫秒）'),
 })
 
-const HELP_TEXT = [
-  '可用命令：',
-  '/new — 结束当前对话，下条消息开启新会话',
-  '/stop — 取消正在执行的任务和排队消息',
-  '/help — 显示本帮助',
-].join('\n')
+function createHelpText(enableWhoami: boolean) {
+  return [
+    '可用命令：',
+    '/new — 结束当前对话，下条消息开启新会话',
+    '/stop — 取消正在执行的任务和排队消息',
+    ...(enableWhoami ? ['/whoami 或 /id — 查看当前 user_openid/group_openid'] : []),
+    '/help — 显示本帮助',
+  ].join('\n')
+}
 
 interface ChatTarget {
   chatId: string
@@ -317,7 +324,15 @@ export function apply(ctx: Context, config: Config) {
         return true
       }
       case '/help':
-        await sendPassive(target, HELP_TEXT, event.msgId)
+        await sendPassive(target, createHelpText(config.enableWhoami !== false), event.msgId)
+        return true
+      case '/whoami':
+      case '/id':
+        if (config.enableWhoami === false) {
+          await sendPassive(target, '身份查询命令已被管理员禁用。', event.msgId)
+        } else {
+          await sendPassive(target, formatIdentityReply(target), event.msgId)
+        }
         return true
       default:
         return false
@@ -345,17 +360,21 @@ export function apply(ctx: Context, config: Config) {
   const gateway = new QQGateway(api, {
     onLog: (line) => console.log(line),
     onMessage: (event) => {
-      if (closing || !allowed(event)) return
+      if (closing) return
+      const text = event.isGroup
+        ? event.content.replace(/^\s*<@!?\S+>\s*/, '').trim()
+        : event.content.trim()
+      if (!text) return
+
+      // 身份发现只开放一个无 Agent、无宿主工具的固定响应端点。
+      const identityDiscovery = config.enableWhoami !== false && isIdentityCommand(text)
+      if (!identityDiscovery && !allowed(event)) return
+
       const dedupeKey = `${chatKeyOf(event)}:${event.msgId}`
       if (!deduplicator.accept(dedupeKey)) {
         console.log(`[dsh-qq-bot] ignored duplicate message ${event.msgId}`)
         return
       }
-
-      const text = event.isGroup
-        ? event.content.replace(/^\s*<@!\S+>\s*/, '').trim()
-        : event.content.trim()
-      if (!text) return
 
       void processInbound(event, text).catch(async (err) => {
         console.warn(`[dsh-qq-bot] inbound failed: ${err}`)
@@ -413,7 +432,8 @@ export function apply(ctx: Context, config: Config) {
   }
 
   if (!config.publicMode && !(config.allowGroups?.length || config.allowUsers?.length)) {
-    console.warn('[dsh-qq-bot] publicMode is disabled and both allowlists are empty; all inbound messages will be ignored')
+    const whoamiNote = config.enableWhoami === false ? '' : '; only /whoami and /id remain available'
+    console.warn(`[dsh-qq-bot] publicMode is disabled and both allowlists are empty; ordinary inbound messages will be ignored${whoamiNote}`)
   }
 
   ctx.effect(() => {

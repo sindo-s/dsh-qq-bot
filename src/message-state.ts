@@ -27,12 +27,19 @@ interface TimedSequence {
 /** 有界、带 TTL 的 QQ 消息去重器。accept=false 表示重复。 */
 export class MessageDeduplicator {
   private readonly entries = new Map<string, number>()
+  private readonly ttlMs: number
+  private readonly maxEntries: number
+  private readonly now: () => number
 
   constructor(
-    private readonly ttlMs = DEFAULT_MESSAGE_STATE_TTL_MS,
-    private readonly maxEntries = DEFAULT_MESSAGE_STATE_MAX_ENTRIES,
-    private readonly now: () => number = Date.now,
-  ) {}
+    ttlMs = DEFAULT_MESSAGE_STATE_TTL_MS,
+    maxEntries = DEFAULT_MESSAGE_STATE_MAX_ENTRIES,
+    now: () => number = Date.now,
+  ) {
+    this.ttlMs = ttlMs
+    this.maxEntries = maxEntries
+    this.now = now
+  }
 
   accept(key: string): boolean {
     const now = this.now()
@@ -65,12 +72,19 @@ export class MessageDeduplicator {
 /** 按 msgId 独立递增的有界被动回复序号。 */
 export class ReplySequencer {
   private readonly entries = new Map<string, TimedSequence>()
+  private readonly ttlMs: number
+  private readonly maxEntries: number
+  private readonly now: () => number
 
   constructor(
-    private readonly ttlMs = DEFAULT_MESSAGE_STATE_TTL_MS,
-    private readonly maxEntries = DEFAULT_MESSAGE_STATE_MAX_ENTRIES,
-    private readonly now: () => number = Date.now,
-  ) {}
+    ttlMs = DEFAULT_MESSAGE_STATE_TTL_MS,
+    maxEntries = DEFAULT_MESSAGE_STATE_MAX_ENTRIES,
+    now: () => number = Date.now,
+  ) {
+    this.ttlMs = ttlMs
+    this.maxEntries = maxEntries
+    this.now = now
+  }
 
   next(msgId: string): number {
     const now = this.now()

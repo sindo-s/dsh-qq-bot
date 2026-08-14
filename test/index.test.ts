@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { QQApi } from '../src/api.ts'
 import { QQGateway, gatewayClosePolicy } from '../src/gateway.ts'
+import { formatIdentityReply, isIdentityCommand } from '../src/identity.ts'
 import {
   KeyedSerialTaskQueue,
   MessageDeduplicator,
@@ -125,6 +126,22 @@ test('message state preserves content, deduplicates, and sequences per msgId', (
   assert.equal(sequencer.next('message-b'), 1)
   now = 201
   assert.equal(sequencer.next('message-a'), 1)
+})
+
+test('identity discovery recognizes only explicit commands and returns copyable config', () => {
+  assert.equal(isIdentityCommand('/whoami'), true)
+  assert.equal(isIdentityCommand('  /WHOAMI  '), true)
+  assert.equal(isIdentityCommand('/id please'), true)
+  assert.equal(isIdentityCommand('/identity'), false)
+  assert.equal(isIdentityCommand('hello /whoami'), false)
+
+  const userReply = formatIdentityReply({ chatId: "user'openid", isGroup: false })
+  assert.match(userReply, /user_openid: user'openid/)
+  assert.match(userReply, /allowUsers:\n  - 'user''openid'/)
+
+  const groupReply = formatIdentityReply({ chatId: 'group-openid', isGroup: true })
+  assert.match(groupReply, /group_openid: group-openid/)
+  assert.match(groupReply, /allowGroups:/)
 })
 
 test('turn router keeps concurrent inbound messages correlated to their own turn', () => {

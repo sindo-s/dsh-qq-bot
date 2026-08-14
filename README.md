@@ -4,14 +4,14 @@
 
 - 不依赖第三方机器人框架，使用 Node.js 内置 `WebSocket` 和 `fetch`
 - 每个 QQ 群或用户拥有独立 Agent 会话
-- 支持 `/new`、`/stop`、`/help`
+- 支持 `/new`、`/stop`、`/help`，并可用 `/whoami` 自助发现 OpenID
 - 消息按 Harness turn 精确关联，网关重连事件自动去重
 - 主动消息和被动回复使用不同的 QQ 请求格式
 - QQ Agent 默认不继承宿主工具，`qq_send` 只能发送到当前会话
 
 ## 前置条件
 
-1. Node.js 22 或更高版本。
+1. Node.js 22.6 或更高版本。
 2. 已能运行 DeepSeek Harness，并配置了默认 provider/model。
 3. 在 [QQ 开放平台](https://q.qq.com) 创建机器人，取得 AppID 与 AppSecret。
 4. 机器人已上线，或将需要测试的群和用户加入沙箱。
@@ -38,6 +38,7 @@ npm ci
         publicMode: false
         allowGroups: ['GROUP_OPENID_1']
         allowUsers: ['USER_OPENID_1']
+        enableWhoami: true
 ```
 
 ```sh
@@ -46,7 +47,17 @@ pnpm dsh web --patch ./cordis.yml
 
 ## 安全默认值
 
-`publicMode` 默认为 `false`。此时只有 `allowGroups` 和 `allowUsers` 中的 QQ 身份能够访问；两个列表均为空时，插件会拒绝全部入站消息并输出警告。
+`publicMode` 默认为 `false`。此时只有 `allowGroups` 和 `allowUsers` 中的 QQ 身份能够访问 Agent；两个列表均为空时，普通消息会被拒绝并输出警告。
+
+为了方便首次配置，`enableWhoami` 默认开启。白名单外用户只能调用不经过 Agent 的固定 `/whoami`（或 `/id`）响应，不能访问模型或宿主工具。若不需要身份发现，可设置 `enableWhoami: false`。
+
+### 获取 OpenID
+
+1. 保持 `publicMode: false`、`enableWhoami: true`。
+2. 私聊机器人发送 `/whoami`，取得当前机器人的 `user_openid`；或在群里 @机器人并发送 `/whoami`，取得 `group_openid`。
+3. 直接复制回复中的 `allowUsers` 或 `allowGroups` 配置片段到 `cordis.yml`，然后重载插件。
+
+OpenID 不是 QQ 号或群号，并且只对当前机器人 AppID 有效。
 
 QQ Agent 默认只拥有绑定到当前会话的 `qq_send(text)`。如确实需要让模型调用宿主的其他全局工具，必须逐项加入 `allowedTools`：
 
@@ -66,6 +77,7 @@ allowedTools: ['web_search']
 | `publicMode` | `false` | 允许所有 QQ 用户访问 |
 | `allowGroups` | `[]` | 允许访问的 `group_openid` |
 | `allowUsers` | `[]` | 允许访问的 `user_openid` |
+| `enableWhoami` | `true` | 允许白名单外用户通过 `/whoami` 或 `/id` 查询当前 OpenID |
 | `allowedTools` | `[]` | QQ Agent 可继承的宿主全局工具名 |
 | `maxSessions` | `100` | 同时保留的最大 QQ 会话数 |
 | `sessionIdleMinutes` | `60` | 空闲 Agent 自动销毁时间 |
@@ -79,6 +91,7 @@ allowedTools: ['web_search']
 |---|---|
 | `/new` | 销毁当前 Agent；下一条消息建立新会话 |
 | `/stop` | 取消当前任务并清空该 Agent 的排队消息 |
+| `/whoami`、`/id` | 返回当前 `user_openid` 或 `group_openid` 及可复制配置 |
 | `/help` | 显示帮助 |
 
 ## 可靠性策略
@@ -98,7 +111,7 @@ npm run check
 npm run pack:check
 ```
 
-`npm run check` 会执行严格 TypeScript 检查和 Node 测试。CI 在 Node 22 上重复运行相同检查。
+`npm run check` 会执行严格 TypeScript 检查、Node 22 原生 strip-only 导入检查和单元测试。`erasableSyntaxOnly` 会在提交前拦截参数属性、枚举等需要转译的 TypeScript 语法；CI 重复运行相同检查。
 
 ## 已知限制
 
