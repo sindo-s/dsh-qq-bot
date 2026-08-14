@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { QQApi } from '../src/api.ts'
 import { QQGateway, gatewayClosePolicy } from '../src/gateway.ts'
 import { formatIdentityReply, isIdentityCommand } from '../src/identity.ts'
+import { createQQSendTool } from '../src/qq-send.ts'
+import { formatToolStatus, normalizeAllowedTools } from '../src/tool-access.ts'
 import {
   KeyedSerialTaskQueue,
   MessageDeduplicator,
@@ -142,6 +145,41 @@ test('identity discovery recognizes only explicit commands and returns copyable 
   const groupReply = formatIdentityReply({ chatId: 'group-openid', isGroup: true })
   assert.match(groupReply, /group_openid: group-openid/)
   assert.match(groupReply, /allowGroups:/)
+})
+
+test('qq_send concludes the turn only after the message is sent', async () => {
+  const sent: string[] = []
+  let conclusions = 0
+  const execution = {
+    concludeTurn() {
+      conclusions++
+    },
+  } as unknown as ToolRunContext
+  const tool = createQQSendTool(async (text) => {
+    sent.push(text)
+  })
+
+  assert.equal(await tool.execute({ text: '正文' }, execution), '已发送到当前 QQ 会话')
+  assert.deepEqual(sent, ['正文'])
+  assert.equal(conclusions, 1)
+
+  const failingTool = createQQSendTool(async () => {
+    throw new Error('send failed')
+  })
+  await assert.rejects(() => failingTool.execute({ text: '不会发出' }, execution), /send failed/)
+  assert.equal(conclusions, 1)
+})
+
+test('tool status separates loaded and missing allowlisted tools', () => {
+  assert.deepEqual(
+    normalizeAllowedTools([' web_search ', 'web_search', '', 'run_code', 'qq_send', 'read_file']),
+    ['web_search', 'read_file'],
+  )
+
+  const status = formatToolStatus(['web_search', 'read_file'], ['run_code', 'web_search'])
+  assert.match(status, /已放行并加载：web_search/)
+  assert.match(status, /已配置但未加载：read_file/)
+  assert.match(status, /普通回复无需调用/)
 })
 
 test('turn router keeps concurrent inbound messages correlated to their own turn', () => {

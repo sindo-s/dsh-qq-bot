@@ -11,7 +11,6 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { AgentDefaultModelConfig } from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
-import { defineTool } from '@deepseek-ai/dsh-tools'
 import { QQApi } from './api.ts'
 import { QQGateway, type QQMessageEvent } from './gateway.ts'
 import { formatIdentityReply, isIdentityCommand } from './identity.ts'
@@ -22,6 +21,8 @@ import {
   TurnReplyRouter,
   splitQQContent,
 } from './message-state.ts'
+import { createQQSendTool } from './qq-send.ts'
+import { formatToolStatus, normalizeAllowedTools } from './tool-access.ts'
 
 export const name = 'dsh-qq-bot'
 export const inject = ['agents', 'agentDefaultModel', 'tools']
@@ -70,6 +71,7 @@ function createHelpText(enableWhoami: boolean) {
     '可用命令：',
     '/new — 结束当前对话，下条消息开启新会话',
     '/stop — 取消正在执行的任务和排队消息',
+    '/tools — 查看当前工具配置和加载状态',
     ...(enableWhoami ? ['/whoami 或 /id — 查看当前 user_openid/group_openid'] : []),
     '/help — 显示本帮助',
   ].join('\n')
@@ -116,6 +118,7 @@ export function apply(ctx: Context, config: Config) {
   const sendQueue = new KeyedSerialTaskQueue()
   const maxSessions = config.maxSessions ?? 100
   const sessionIdleMs = (config.sessionIdleMinutes ?? 60) * 60_000
+  const allowedToolNames = normalizeAllowedTools(config.allowedTools)
   let closing = false
 
   function sendPassive(target: ChatTarget, text: string, msgId: string) {
@@ -187,21 +190,7 @@ export function apply(ctx: Context, config: Config) {
   }
 
   function createScopedQQTool(agentCtx: Context, target: ChatTarget) {
-    return agentCtx.tools.register(defineTool({
-      name: 'qq_send',
-      description: 'Proactively send text to the current QQ conversation only.',
-      parameters: {
-        text: { type: 'string', required: true, description: '要发送的文本内容' },
-      },
-      output: {
-        schema: { type: 'string' },
-        render: (_args, value) => [{ type: 'text', text: value }],
-      },
-      async execute(args) {
-        await sendProactive(target, args.text)
-        return '已发送到当前 QQ 会话'
-      },
-    }))
+    return agentCtx.tools.register(createQQSendTool((text) => sendProactive(target, text)))
   }
 
   async function createAgentForBinding(chatKey: string, binding: ChatBinding): Promise<AgentHandle> {
@@ -212,10 +201,12 @@ export function apply(ctx: Context, config: Config) {
       throw new Error('dsh default provider/model is not configured')
     }
 
-    const allowedTools = new Set(config.allowedTools ?? [])
+    const allowedTools = new Set(allowedToolNames)
     const deniedInheritedTools = ctx.tools.schemas()
       .map((schema) => schema.name)
-      .filter((toolName) => toolName !== 'run_code' && !allowedTools.has(toolName))
+      .filter((toolName) => toolName !== 'run_code'
+        && toolName !== 'qq_send'
+        && !allowedTools.has(toolName))
 
     const handle = await ctx.agents.create({
       sessionId: binding.sessionId,
@@ -325,6 +316,13 @@ export function apply(ctx: Context, config: Config) {
       }
       case '/help':
         await sendPassive(target, createHelpText(config.enableWhoami !== false), event.msgId)
+        return true
+      case '/tools':
+        await sendPassive(
+          target,
+          formatToolStatus(allowedToolNames, ctx.tools.schemas().map((schema) => schema.name)),
+          event.msgId,
+        )
         return true
       case '/whoami':
       case '/id':
