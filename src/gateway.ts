@@ -35,13 +35,18 @@ export interface QQGatewayOptions {
 }
 
 export class QQGateway {
+  private api: QQApi
+  private options: QQGatewayOptions
   private ws: WebSocket | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private lastSeq: number | null = null
   private sessionId = ''
   private stopped = false
 
-  constructor(private api: QQApi, private options: QQGatewayOptions) {}
+  constructor(api: QQApi, options: QQGatewayOptions) {
+    this.api = api
+    this.options = options
+  }
 
   private log(line: string) {
     this.options.onLog?.(line)

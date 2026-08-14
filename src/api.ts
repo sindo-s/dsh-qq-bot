@@ -15,10 +15,13 @@ const SANDBOX_API = 'https://sandbox.api.sgroup.qq.com'
 const TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken'
 
 export class QQApi {
+  private options: QQApiOptions
   private accessToken = ''
   private tokenExpiresAt = 0
 
-  constructor(private options: QQApiOptions) {}
+  constructor(options: QQApiOptions) {
+    this.options = options
+  }
 
   private get baseUrl() {
     return this.options.sandbox ? SANDBOX_API : PROD_API
