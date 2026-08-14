@@ -1,3 +1,9 @@
 node_modules/
 lib/
 *.log
+.npm-cache/
+.package-inspect/
+.env
+.env.*
+!.env.example
+cordis.yml

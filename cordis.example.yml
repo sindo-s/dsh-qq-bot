@@ -1,13 +1,18 @@
 # dsh-qq-bot 加载示例
 # 用法：pnpm dsh web --patch ./cordis.example.yml
-# 把 name 改成本仓库的绝对路径（指向 src/index.ts）
+# 请复制为被 .gitignore 忽略的 cordis.yml，再填写真实凭据。
 
 - insert:
     - id: qq-bot
       name: '/absolute/path/to/dsh-qq-bot/src/index.ts'
       config:
-        appId: '你的机器人 AppID'
-        clientSecret: '你的机器人 AppSecret'
+        appId: 'YOUR_APP_ID'
+        clientSecret: 'YOUR_APP_SECRET'
         sandbox: false
-        # allowGroups: ['GROUP_OPENID_1']
-        # allowUsers: ['USER_OPENID_1']
+        publicMode: false
+        allowGroups: ['GROUP_OPENID_1']
+        allowUsers: ['USER_OPENID_1']
+        allowedTools: []
+        maxSessions: 100
+        sessionIdleMinutes: 60
+        requestTimeoutMs: 10000
