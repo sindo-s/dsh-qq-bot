@@ -98,21 +98,39 @@ async function doctor(path) {
     : '提示：白名单为空；先发送 /whoami 获取 OpenID，再加入白名单。')
   console.log('还需在 DSH 中确认默认 provider/model 与工具已加载，并在 QQ 平台配置测试群/用户。')
 }
+async function init(path, bundle) {
+  await saveOverlay(path, {
+    enabled: true,
+    appId: '',
+    clientSecret: '',
+    sandbox: false,
+    publicMode: false,
+    allowGroups: [],
+    allowUsers: [],
+    enableWhoami: true,
+    allowedTools: [],
+    enableImages: true,
+  }, bundle)
+  console.log('已生成配置：' + path)
+  console.log('启动 DSH 前设置 QQ_BOT_APP_ID 和 QQ_BOT_APP_SECRET，并配置默认 provider/model。')
+  console.log('白名单为空；先发送 /whoami 获取 OpenID，再加入白名单。已有配置不会覆盖。')
+}
 export async function main(args) {
   const [command, ...options] = args
   if (!command || ['--help', '-h', 'help'].includes(command)) {
-    console.log('用法：dsh-qq-bot setup|doctor [--output cordis.yml] [--bundle]\nsetup：引导生成配置；--bundle 为已安装 bundle 生成覆盖条目。\ndoctor：离线检查配置，不输出凭据，不连接 QQ。')
+    console.log('用法：dsh-qq-bot setup|init|doctor [--output cordis.yml] [--bundle]\nsetup：引导生成配置；--bundle 为已安装 bundle 生成覆盖条目。\ninit：无需交互生成环境变量配置，适用于服务器；同样支持 --bundle。\ndoctor：离线检查配置，不输出凭据，不连接 QQ。')
     return
   }
-  if (!['setup', 'doctor'].includes(command)) throw new Error('未知命令，请使用 --help。')
+  if (!['setup', 'init', 'doctor'].includes(command)) throw new Error('未知命令，请使用 --help。')
   let path = resolve('cordis.yml')
   let bundle = false
   for (let i = 0; i < options.length; i++) {
     if (options[i] === '--output' && options[i + 1] && !options[i + 1].startsWith('--')) path = resolve(options[++i])
-    else if (options[i] === '--bundle' && command === 'setup') bundle = true
+    else if (options[i] === '--bundle' && ['setup', 'init'].includes(command)) bundle = true
     else throw new Error('未知或不完整的选项，请使用 --help。')
   }
-  if (command === 'setup') await setup(path, bundle)
+  if (command === 'init') await init(path, bundle)
+  else if (command === 'setup') await setup(path, bundle)
   else await doctor(path)
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

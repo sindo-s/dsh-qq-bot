@@ -9,10 +9,23 @@
 - 主动消息和被动回复使用不同的 QQ 请求格式
 - QQ Agent 默认不继承宿主工具，`qq_send` 只能发送到当前会话
 
+## 适用环境
+
+这是标准 DSH 插件，**不要求 DSH Desktop Next**。插件使用宿主提供的 Agent、默认模型、工具和附件服务，不读取 Next 的 slot，也不依赖桌面窗口或 WSL。
+
+| 环境 | 加载方式 |
+| --- | --- |
+| 普通 DSH CLI / Web | 安装 bundle 到目标 profile，或使用源码路径 patch |
+| Linux 服务器 / 容器 | 同一 bundle，通过环境变量配置，运行独立 profile |
+| DSH 源码开发环境 | 在 DSH 仓库中使用 `pnpm dsh` 替代 `dsh` |
+| Desktop Next | 在其实际运行时中安装到目标 profile，见下方专项说明 |
+
+操作系统与宿主 DSH 的支持范围一致；CI 在 Windows、Linux、macOS 上检查插件。自定义精简宿主至少需要 `agents`、`agentDefaultModel`、`tools` 服务，图片另需 `attachments` 服务与视觉模型。没有附件服务仍可使用文字，图片会返回明确提示。
+
 ## 前置条件
 
 1. Node.js 22.6 或更高版本。
-2. 已能运行 DeepSeek Harness，并配置了默认 provider/model。本项目支持 DSH `0.1.5-rc.2`（当前 latest/next）和 `0.1.6-alpha.2`（最新 alpha），使用 Cordis `4.0.2` / Schemastery `3.18.2`，两套版本分别测试。
+2. 已能运行 DeepSeek Harness，并配置了默认 provider/model。本项目支持 DSH `0.1.5-rc.2`和 `0.1.6-alpha.2`，使用 Cordis `4.0.2` / Schemastery `3.18.2`，两套版本分别测试。
 3. 在 [QQ 开放平台](https://q.qq.com) 创建机器人，取得 AppID 与 AppSecret。
 4. 机器人已上线，或将需要测试的群和用户加入沙箱。
 
@@ -63,7 +76,7 @@ dsh web --patch "/absolute/path/to/dsh-qq-bot/cordis.yml"
 ```sh
 npm ci
 npm pack
-dsh plugin --profile qq add /absolute/path/to/dsh-qq-bot-0.3.1.tgz
+dsh plugin --profile qq add /absolute/path/to/dsh-qq-bot-0.3.2.tgz
 npm run setup -- --bundle --output cordis.yml
 npm run doctor
 dsh --profile qq --patch /absolute/path/to/cordis.yml
@@ -72,6 +85,28 @@ dsh --profile qq --patch /absolute/path/to/cordis.yml
 先在该 profile 中配置 DSH 默认 provider/model。向导的 `--bundle` 模式生成对 `id: qq-bot` 的覆盖条目，避免与已安装 bundle 重复插入。源码模式生成插入条目，二者不要混用。已安装包也提供 `dsh-qq-bot setup` 和 `dsh-qq-bot doctor` 可执行入口，可通过安装环境的包管理器执行。
 
 DSH 后续 patch 会**替换整个 config**，并非逐字段深合并；编辑覆盖层时应保留这一行所需的全部配置。发布包包含构建产物，使用 tarball 无需在安装时构建；直接从 GitHub 安装源码目前不作为推荐路径。
+
+### 普通 DSH / 无桌面服务器
+
+先安装并配置受支持版本的 DSH；本包复用它的模型与工具。下面从插件源码目录操作，生成独立的 QQ profile：
+
+```sh
+npm ci
+npm pack
+dsh plugin --profile qq add /absolute/path/to/dsh-qq-bot-0.3.2.tgz
+npm run init -- --bundle --output cordis.yml
+```
+
+`init` 不要求交互终端，不读取或写入环境变量中的凭据，生成的配置默认仅允许白名单；已有文件会报错而不会覆盖。交互配置仍可用 `npm run setup -- --bundle`。在运行 DSH 的同一环境中设置前文的两个 QQ 凭据变量，然后检查并启动：
+
+```sh
+npm run doctor
+dsh --profile qq --patch /absolute/path/to/cordis.yml
+```
+
+这个独立 profile 由官方 CLI 初始化为 base + QQ bundle，无需启动 Web 页面。先确认该运行环境的 DSH 默认 provider/model 已配置；原 Web profile 专属的模型设置不会自动复制到新 profile。也可把安装命令的 `qq` 改为已有的 profile，并用同名 profile 启动，以复用它的配置。
+
+`DSH_HOME` 决定 DSH 配置与附件存储位置。安装与运行必须使用相同的 `DSH_HOME`、profile 和操作系统用户；服务器服务或容器需显式传入 QQ 凭据，持久化 DSH_HOME，并保持进程运行。QQ 使用出站 WebSocket/HTTPS 连接，不需要为本插件暴露入站端口。普通 DSH 的这些操作不需要 Desktop Next 的安装目录或管理脚本。
 
 ### 配置检查与排障
 
@@ -156,7 +191,7 @@ allowedTools:
 
 ## 图片输入
 
-私聊直接发送图片，群聊发送图片时 @机器人。支持纯图片、图文和同条消息多图；纯图片会自动请求模型分析内容。模型需支持图片输入，宿主需加载 DSH 附件存储服务（Desktop Next 默认提供）。
+私聊直接发送图片，群聊发送图片时 @机器人。支持纯图片、图文和同条消息多图；纯图片会自动请求模型分析内容。模型需支持图片输入，宿主需加载 DSH 附件存储服务（使用默认 base 的宿主提供；自定义宿主需自行加载）。
 
 默认每条最多 4 张、单张 10 MiB，实际还受宿主图片限制约束。支持 PNG、JPEG、WebP、GIF；图片下载或解析失败会回复具体提示。`/stop`、`/new` 可取消尚未提交的图片下载。
 

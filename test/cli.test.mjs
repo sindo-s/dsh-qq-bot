@@ -39,3 +39,26 @@ test('doctor rejects ambiguous rows and executable YAML', () => {
   assert.throws(() => readConfig('- id: qq-bot\n  config: !!js process.env'))
   assert.throws(() => readConfig('- id: another-plugin'))
 })
+
+test('non-interactive init creates portable bundle config without copying environment secrets', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'qq-init-'))
+  try {
+    const path = join(dir, 'cordis.yml')
+    const args = ['scripts/cli.mjs', 'init', '--bundle', '--output', path]
+    const env = {...process.env, QQ_BOT_APP_ID:'private-app-id', QQ_BOT_APP_SECRET:'private-secret-value'}
+    const result = spawnSync(process.execPath, args, {encoding:'utf8',env})
+    assert.equal(result.status, 0, result.stderr)
+    const text = await readFile(path,'utf8')
+    const config = readConfig(text)
+    assert.equal(config.enabled,true)
+    assert.equal(config.publicMode,false)
+    assert.deepEqual(config.allowUsers,[])
+    assert.ok(!text.includes('insert:'))
+    for (const secret of ['private-app-id','private-secret-value']) assert.ok(!(text+result.stdout+result.stderr).includes(secret))
+    const duplicate=spawnSync(process.execPath,args,{encoding:'utf8',env})
+    assert.equal(duplicate.status,1)
+    assert.equal(await readFile(path,'utf8'),text)
+    const check=spawnSync(process.execPath,['scripts/cli.mjs','doctor','--output',path],{encoding:'utf8',env})
+    assert.equal(check.status,0,check.stderr)
+  } finally { await rm(dir,{recursive:true,force:true}) }
+})

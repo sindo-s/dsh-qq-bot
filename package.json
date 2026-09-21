@@ -1,6 +1,6 @@
 {
   "name": "dsh-qq-bot",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "DeepSeek Harness plugin bridging QQ official Bot API to dsh agents without a third-party bot framework.",
   "type": "module",
   "main": "lib/index.js",
@@ -23,7 +23,8 @@
     "prepack": "npm run build",
     "setup": "npm run build && node scripts/cli.mjs setup",
     "doctor": "npm run build && node scripts/cli.mjs doctor",
-    "pretest": "npm run build"
+    "pretest": "npm run build",
+    "init": "npm run build && node scripts/cli.mjs init"
   },
   "engines": {
     "node": ">=22.6"
