@@ -1,17 +1,18 @@
-# dsh-qq-bot 加载示例
-# 用法：pnpm dsh web --patch ./cordis.example.yml
-# 请复制为被 .gitignore 忽略的 cordis.yml，再填写真实凭据。
-
+# 先 npm run build，再复制为 cordis.yml 并修改插件绝对路径。
+# 启动：dsh web --patch /absolute/path/to/cordis.yml
+# 更简单的方式：npm run setup 自动生成路径和配置。
 - insert:
     - id: qq-bot
-      name: '/absolute/path/to/dsh-qq-bot/src/index.ts'
+      name: '/absolute/path/to/dsh-qq-bot/lib/index.js'
       config:
-        appId: 'YOUR_APP_ID'
-        clientSecret: 'YOUR_APP_SECRET'
+        # 留空读取 QQ_BOT_APP_ID / QQ_BOT_APP_SECRET，也可直接填写。
+        appId: ''
+        clientSecret: ''
         sandbox: false
         publicMode: false
-        allowGroups: ['GROUP_OPENID_1']
-        allowUsers: ['USER_OPENID_1']
+        # 首次通过 /whoami 获取 OpenID 后填写，不能填写 QQ 号或群号。
+        allowGroups: []
+        allowUsers: []
         enableWhoami: true
         allowedTools: []
         maxSessions: 100

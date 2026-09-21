@@ -308,3 +308,18 @@ test('a socket that never receives HELLO is closed and scheduled for reconnect',
   assert.equal(logs.some((line) => line.includes('HELLO timed out')), true)
   gateway.stop()
 })
+
+test('QQ private and group dispatch preserve image attachments without text', async () => {
+  const socket = fakeWebSocket()
+  const messages: Array<{ content: string; attachments?: Array<{url:string}>; isGroup:boolean }> = []
+  const api = { getGatewayUrl: async () => 'wss://gateway.example', getAccessToken: async () => 'token', invalidateAccessToken: () => {} } as unknown as QQApi
+  const gateway = new QQGateway(api, { onMessage: e => messages.push(e), createWebSocket: () => socket })
+  try {
+    await gateway.start()
+    for (const type of ['C2C_MESSAGE_CREATE', 'GROUP_AT_MESSAGE_CREATE']) {
+      socket.onmessage?.call(socket, {data: JSON.stringify({op:0,t:type,d:{id:type,author:{user_openid:'user'},group_openid:'group',attachments:[{url:'https://gchat.qpic.cn/image',content_type:'image/png'}]}})} as MessageEvent)
+    }
+    await waitFor(() => messages.length === 2)
+    assert.deepEqual(messages.map(e => [e.content,e.isGroup,e.attachments?.[0].url]), [['',false,'https://gchat.qpic.cn/image'],['',true,'https://gchat.qpic.cn/image']])
+  } finally { gateway.stop() }
+})

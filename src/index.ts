@@ -5,12 +5,16 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
-import Schema from '@deepseek-ai/schemastery'
+import { Config, resolveConfig } from './config.ts'
+export { Config } from './config.ts'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { AgentDefaultModelConfig } from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { SessionId, SessionEvent } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-attachment'
+import { ImageInputError, prepareQQContent } from './attachments.ts'
 import { QQApi } from './api.ts'
 import { QQGateway, type QQMessageEvent } from './gateway.ts'
 import { formatIdentityReply, isIdentityCommand } from './identity.ts'
@@ -27,44 +31,6 @@ import { formatToolStatus, normalizeAllowedTools } from './tool-access.ts'
 export const name = 'dsh-qq-bot'
 export const inject = ['agents', 'agentDefaultModel', 'tools']
 
-export interface Config {
-  /** QQ 开放平台机器人 AppID。 */
-  appId: string
-  /** QQ 开放平台机器人 AppSecret。 */
-  clientSecret: string
-  /** 使用沙箱环境。 */
-  sandbox?: boolean
-  /** 显式允许所有 QQ 用户；默认关闭。 */
-  publicMode?: boolean
-  /** 允许响应的 group_openid；publicMode=false 时生效。 */
-  allowGroups?: string[]
-  /** 允许响应的 user_openid；publicMode=false 时生效。 */
-  allowUsers?: string[]
-  /** 允许白名单外用户通过 /whoami 或 /id 查询自己的 OpenID。 */
-  enableWhoami?: boolean
-  /** QQ Agent 可以继承使用的宿主全局工具名；默认不继承任何工具。 */
-  allowedTools?: string[]
-  /** 同时保留的最大 QQ 会话数。 */
-  maxSessions?: number
-  /** 空闲会话自动销毁时间（分钟）。 */
-  sessionIdleMinutes?: number
-  /** QQ REST API 请求超时（毫秒）。 */
-  requestTimeoutMs?: number
-}
-
-export const Config: Schema<Config> = Schema.object({
-  appId: Schema.string().required().description('QQ 开放平台机器人 AppID'),
-  clientSecret: Schema.string().required().role('secret').description('QQ 开放平台机器人 AppSecret'),
-  sandbox: Schema.boolean().default(false).description('使用 QQ 沙箱 API'),
-  publicMode: Schema.boolean().default(false).description('允许所有 QQ 用户访问；公开部署前请确认 Agent 工具权限'),
-  allowGroups: Schema.array(String).default([]).description('允许访问的群聊 group_openid'),
-  allowUsers: Schema.array(String).default([]).description('允许访问的单聊 user_openid'),
-  enableWhoami: Schema.boolean().default(true).description('允许白名单外用户使用 /whoami 或 /id 查询 OpenID'),
-  allowedTools: Schema.array(String).default([]).description('QQ Agent 可继承的宿主全局工具名'),
-  maxSessions: Schema.number().min(1).default(100).description('同时保留的最大 QQ 会话数'),
-  sessionIdleMinutes: Schema.number().min(1).default(60).description('空闲会话自动销毁时间（分钟）'),
-  requestTimeoutMs: Schema.number().min(1000).default(10_000).description('QQ REST API 请求超时（毫秒）'),
-})
 
 function createHelpText(enableWhoami: boolean) {
   return [
@@ -83,11 +49,13 @@ interface ChatTarget {
 }
 
 interface ChatBinding {
-  sessionId: ReturnType<typeof SessionId>
+  sessionId: SessionId
   target: ChatTarget
   handle: AgentHandle | null
   creating: Promise<AgentHandle> | null
   disposed: boolean
+  creationController: AbortController
+  inputController: AbortController
   lastActiveAt: number
 }
 
@@ -102,7 +70,13 @@ function textFromAssistantMessage(event: SessionEvent<'assistant/message'>) {
     .join('')
 }
 
-export function apply(ctx: Context, config: Config) {
+export function apply(ctx: Context, input: Config) {
+  const validated = Config(input)
+  if (validated.enabled === false) {
+    console.log('[dsh-qq-bot] 已安装，QQ 连接已暂停；填写凭据和白名单后设置 enabled: true。')
+    return
+  }
+  const config = resolveConfig(validated)
   const api = new QQApi({
     appId: config.appId,
     clientSecret: config.clientSecret,
@@ -116,6 +90,7 @@ export function apply(ctx: Context, config: Config) {
   const deduplicator = new MessageDeduplicator()
   const replySequencer = new ReplySequencer()
   const sendQueue = new KeyedSerialTaskQueue()
+  const admissionQueue = new KeyedSerialTaskQueue()
   const maxSessions = config.maxSessions ?? 100
   const sessionIdleMs = (config.sessionIdleMinutes ?? 60) * 60_000
   const allowedToolNames = normalizeAllowedTools(config.allowedTools)
@@ -157,6 +132,8 @@ export function apply(ctx: Context, config: Config) {
     if (!binding) return
 
     binding.disposed = true
+    binding.creationController.abort()
+    binding.inputController.abort()
     bindings.delete(chatKey)
     clearSessionRouting(String(binding.sessionId))
 
@@ -210,6 +187,7 @@ export function apply(ctx: Context, config: Config) {
 
     const handle = await ctx.agents.create({
       sessionId: binding.sessionId,
+      signal: binding.creationController.signal,
       meta: { cwd: process.cwd() },
       agentOptions: {
         provider: selection.provider,
@@ -257,11 +235,13 @@ export function apply(ctx: Context, config: Config) {
       }
       if (!binding) {
         binding = {
-          sessionId: SessionId(`qq-${randomUUID()}`),
+          sessionId: brandString<SessionId>(`qq-${randomUUID()}`),
           target: { chatId: event.chatId, isGroup: event.isGroup },
           handle: null,
           creating: null,
           disposed: false,
+          creationController: new AbortController(),
+          inputController: new AbortController(),
           lastActiveAt: Date.now(),
         }
         bindings.set(chatKey, binding)
@@ -281,6 +261,12 @@ export function apply(ctx: Context, config: Config) {
     const creating = binding.creating
     try {
       return (await creating).agent
+    } catch (error) {
+      if (bindings.get(chatKey) === binding) {
+        bindings.delete(chatKey)
+        clearSessionRouting(String(binding.sessionId))
+      }
+      throw error
     } finally {
       if (binding.creating === creating) binding.creating = null
     }
@@ -305,6 +291,10 @@ export function apply(ctx: Context, config: Config) {
         return true
       case '/stop': {
         const binding = bindings.get(chatKey)
+        if (binding) {
+          binding.inputController.abort()
+          binding.inputController = new AbortController()
+        }
         const agent = binding && ctx.agents.get(binding.sessionId)
         if (agent) {
           agent.cancel({ kind: 'user' })
@@ -341,18 +331,27 @@ export function apply(ctx: Context, config: Config) {
     if (await handleCommand(event, text)) return
 
     const agent = await ensureAgent(event)
-    const message = createUserMessage({
-      content: [{ type: 'text', text }],
-      source: { kind: 'user' },
+    const binding = bindings.get(chatKeyOf(event))
+    if (!binding || binding.disposed || closing) return
+    const signal = binding.inputController.signal
+    await admissionQueue.run(chatKeyOf(event), async () => {
+      signal.throwIfAborted()
+      const content = await prepareQQContent(text, event.attachments ?? [],
+        event.attachments?.length ? ctx.get('attachments') : undefined, config, signal)
+      signal.throwIfAborted()
+      const message = createUserMessage({
+        content,
+        source: { kind: 'user' },
+      })
+      const messageId = String(message.id)
+      turnRouter.queue(String(agent.id), messageId, event)
+      try {
+        agent.followup(message)
+      } catch (err) {
+        turnRouter.removePending(messageId)
+        throw err
+      }
     })
-    const messageId = String(message.id)
-    turnRouter.queue(String(agent.id), messageId, event)
-    try {
-      agent.followup(message)
-    } catch (err) {
-      turnRouter.removePending(messageId)
-      throw err
-    }
   }
 
   const gateway = new QQGateway(api, {
@@ -362,7 +361,7 @@ export function apply(ctx: Context, config: Config) {
       const text = event.isGroup
         ? event.content.replace(/^\s*<@!?\S+>\s*/, '').trim()
         : event.content.trim()
-      if (!text) return
+      if (!text && !event.attachments?.length) return
 
       // 身份发现只开放一个无 Agent、无宿主工具的固定响应端点。
       const identityDiscovery = config.enableWhoami !== false && isIdentityCommand(text)
@@ -375,11 +374,12 @@ export function apply(ctx: Context, config: Config) {
       }
 
       void processInbound(event, text).catch(async (err) => {
+        if (closing || (err instanceof Error && err.name === 'AbortError')) return
         console.warn(`[dsh-qq-bot] inbound failed: ${err}`)
         try {
           await sendPassive(
             { chatId: event.chatId, isGroup: event.isGroup },
-            '处理消息失败，请稍后重试。',
+            err instanceof ImageInputError ? err.message : '处理消息失败，请稍后重试。',
             event.msgId,
           )
         } catch (replyError) {
@@ -445,6 +445,7 @@ export function apply(ctx: Context, config: Config) {
       clearInterval(sweepTimer)
       gateway.stop()
       await Promise.allSettled([...bindings.keys()].map((chatKey) => destroyAgent(chatKey)))
+      await admissionQueue.drain()
       await sendQueue.drain()
     }
   })

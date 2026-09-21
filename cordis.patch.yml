@@ -1,0 +1,6 @@
+# Credentials: QQ_BOT_APP_ID / QQ_BOT_APP_SECRET, or a complete user config override.
+- insert:
+    - id: qq-bot
+      name: dsh-qq-bot
+      config:
+        enabled: false

@@ -3,6 +3,7 @@
  * 负责鉴权、心跳、断线重连与会话恢复。
  */
 
+import { parseQQAttachments, type QQAttachment } from './attachments.ts'
 import type { QQApi } from './api.ts'
 
 /** 群聊 @机器人 + 单聊消息事件 intent。 */
@@ -21,6 +22,8 @@ export interface QQMessageEvent {
   type: string
   /** 消息纯文本内容；群聊中可能包含 @机器人 前缀。 */
   content: string
+  /** QQ 官方附件；空文本的图片消息也必须保留。 */
+  attachments?: QQAttachment[]
   /** 被动回复凭证。 */
   msgId: string
   /** 群事件的 group_openid 或单聊事件的 author user_openid。 */
@@ -358,6 +361,7 @@ export class QQGateway {
         this.options.onMessage({
           type: payload.t,
           content: typeof data.content === 'string' ? data.content : '',
+          attachments: parseQQAttachments(data.attachments),
           msgId,
           chatId,
           isGroup: true,
@@ -375,6 +379,7 @@ export class QQGateway {
         this.options.onMessage({
           type: payload.t,
           content: typeof data.content === 'string' ? data.content : '',
+          attachments: parseQQAttachments(data.attachments),
           msgId,
           chatId,
           isGroup: false,
